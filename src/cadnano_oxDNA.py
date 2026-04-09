@@ -1047,6 +1047,100 @@ if __name__ == '__main__':
 
         vh_vb2nuc_rev.add_stap(vh, vb, strandii, rev_nuciis)
 
+    # --- Fix: route-aware scaffold sequence assignment ---
+    # When a single-line sequence file is provided (-q with full scaffold
+    # sequence), assign bases by tracing the cadnano scaffold route rather
+    # than per-helix. This ensures the correct base lands at each physical
+    # position, which is critical for sequence-dependent simulations.
+    if sequence_file and single_strand_system and len(sequences) == 1:
+        scaffold_seq = sequences[0]  # full scaffold sequence as list of ints
+
+        # Trace scaffold route through cadnano connectivity
+        # Build (vh_num -> vhelix) lookup
+        vh_by_num = {vh.num: vh for vh in cadsys.vhelices}
+
+        # Find scaffold 5' end: position where V_0 == -1 (no predecessor)
+        five_prime_pos = None
+        for vh in cadsys.vhelices:
+            for i in range(len(vh.scaf)):
+                sq = vh.scaf[i]
+                if sq.V_0 == -1 and sq.b_0 == -1 and not (sq.V_1 == -1 and sq.b_1 == -1):
+                    five_prime_pos = (vh.num, i)
+                    break
+            if five_prime_pos is not None:
+                break
+
+        if five_prime_pos is None:
+            # Circular scaffold — start at first occupied position
+            for vh in cadsys.vhelices:
+                for i in range(len(vh.scaf)):
+                    sq = vh.scaf[i]
+                    if not (sq.V_0 == -1 and sq.b_0 == -1 and sq.V_1 == -1 and sq.b_1 == -1):
+                        five_prime_pos = (vh.num, i)
+                        break
+                if five_prime_pos is not None:
+                    break
+
+        if five_prime_pos is not None:
+            # Walk 5'→3' along scaffold, collecting (vh, vb) positions
+            route_positions = []
+            current = five_prime_pos
+            visited = set()
+            while current and current not in visited:
+                visited.add(current)
+                vh_num, vb = current
+                route_positions.append((vh_num, vb))
+                vh_obj = vh_by_num[vh_num]
+                sq = vh_obj.scaf[vb]
+                nv, ni = sq.V_1, sq.b_1
+                if nv == -1:
+                    break
+                current = (nv, ni)
+
+            # Expand route to physical nucleotides (handle skips and loops)
+            seq_idx = 0
+            for vh_num, vb in route_positions:
+                vh_obj = vh_by_num[vh_num]
+
+                # Check for deletion (skip)
+                is_skip = (vb < len(vh_obj.skip) and vh_obj.skip[vb] != 0)
+                if is_skip:
+                    continue  # no physical nucleotide
+
+                # Assign base to the nucleotide at this scaffold position
+                if (vh_num, vb) in vh_vb2nuc_rev._scaf and seq_idx < len(scaffold_seq):
+                    strand_idx, nuc_indices = vh_vb2nuc_rev._scaf[(vh_num, vb)]
+                    strand = rev_sys._strands[strand_idx]
+                    for nuc_idx in nuc_indices:
+                        local_idx = nuc_idx - nnucs_to_here[strand_idx]
+                        if 0 <= local_idx < len(strand._nucleotides) and seq_idx < len(scaffold_seq):
+                            strand._nucleotides[local_idx]._base = scaffold_seq[seq_idx]
+                            seq_idx += 1
+
+                # Handle insertions (loop bases)
+                n_loop = vh_obj.loop[vb] if vb < len(vh_obj.loop) else 0
+                # Loop bases are already counted in nuc_indices above
+                # (TacoxDNA expands loops into extra nucleotides)
+
+            # Also assign complement bases to the paired staple nucleotides
+            for vh_num, vb in route_positions:
+                vh_obj = vh_by_num[vh_num]
+                is_skip = (vb < len(vh_obj.skip) and vh_obj.skip[vb] != 0)
+                if is_skip:
+                    continue
+                if (vh_num, vb) in vh_vb2nuc_rev._scaf and (vh_num, vb) in vh_vb2nuc_rev._stap:
+                    scaf_strand, scaf_nucs = vh_vb2nuc_rev._scaf[(vh_num, vb)]
+                    stap_strand, stap_nucs = vh_vb2nuc_rev._stap[(vh_num, vb)]
+                    for s_nuc, t_nuc in zip(scaf_nucs, stap_nucs):
+                        s_local = s_nuc - nnucs_to_here[scaf_strand]
+                        t_local = t_nuc - nnucs_to_here[stap_strand]
+                        scaf_base = rev_sys._strands[scaf_strand]._nucleotides[s_local]._base
+                        rev_sys._strands[stap_strand]._nucleotides[t_local]._base = 3 - scaf_base
+
+            base.Logger.log("Assigned scaffold sequence via cadnano route (%d bases)" % seq_idx, base.Logger.INFO)
+        else:
+            base.Logger.log("Could not find scaffold 5' end in cadnano file; scaffold sequence not assigned", base.Logger.WARNING)
+
     # dump the spatial arrangement of the vhelices to a file
     vhelix_pattern = {}
     for i in range(len(cadsys.vhelices)):
