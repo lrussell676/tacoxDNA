@@ -32,7 +32,7 @@ class Options(object):
 def print_usage():
 	print("USAGE:", file=sys.stderr)
 	print("\t%s centerline_file" % sys.argv[0], file=sys.stderr)
-	print("\t[-c\--closed] [-o\--open] [-h\--help] [-d\--dsDNA] [-s\--ssDNA] [-n\--nicked] [-p\--supercoiling VALUE] [-w\--writhe VALUE] [-e\--seed VALUE] [-q\--sequence FILE]", file=sys.stderr)
+	print(r"\t[-c\--closed] [-o\--open] [-h\--help] [-d\--dsDNA] [-s\--ssDNA] [-n\--nicked] [-p\--supercoiling VALUE] [-w\--writhe VALUE] [-e\--seed VALUE] [-q\--sequence FILE]", file=sys.stderr)
 	exit(1)
 		
 		
